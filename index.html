@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="英語ノート">
+<title>英語YouTubeノート</title>
+<style>
+:root{--bg:#eef3f5;--ink:#16252d;--sub:#5b6d76;--card:#fff;--ac:#0e7c86;--hl:#ffe58a;--ln:#d3dde2}
+@media(prefers-color-scheme:dark){:root{--bg:#10191e;--ink:#e6eef1;--sub:#93a6af;--card:#1a272e;--ac:#4cc3cf;--hl:#5a4a10;--ln:#2c3c44}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 -apple-system,"Hiragino Sans",sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{display:flex;gap:6px;padding:8px}
+input,textarea{width:100%;font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--ln);border-radius:8px;padding:8px}
+button{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--ln);border-radius:8px;padding:8px 12px}
+button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+#wrap{position:relative;padding-top:56.25%;background:#000}
+#wrap iframe,#wrap #player{position:absolute;inset:0;width:100%;height:100%}
+.bar{display:flex;gap:6px;padding:8px}.bar button{flex:1}
+#cur{margin:0 8px;padding:12px;min-height:84px;background:var(--card);border-radius:10px;font-size:19px;white-space:pre-line;border-left:5px solid var(--ac)}
+#cur small{display:block;color:var(--sub);font-size:13px}
+section{padding:8px}
+.row{display:flex;gap:8px;align-items:flex-start;padding:8px;border-bottom:1px solid var(--ln);white-space:pre-line}
+.row.now{background:var(--hl)}
+.row .t{color:var(--ac);min-width:44px;cursor:pointer}.row .x{flex:1}
+.row button{padding:2px 8px}
+#list{max-height:38vh;overflow:auto}
+textarea{height:110px;margin-bottom:8px}
+.hint{color:var(--sub);font-size:13px}
+</style></head><body>
+<header><input id="url" placeholder="YouTubeのURLを貼る" inputmode="url"><button id="go" class="on">読込</button></header>
+<div id="wrap"><div id="player"></div></div>
+<div class="bar" id="modes"><button data-m="en" class="on">English</button><button data-m="ja">日本語</button><button data-m="both">両方</button></div>
+<div id="cur"><small>字幕がここに出ます</small></div>
+<div class="bar" id="tabs"><button data-p="list" class="on">字幕</button><button data-p="memo">メモ</button><button data-p="subs">字幕を貼る</button></div>
+
+<section id="p-list"><div id="list"><p class="hint">「字幕を貼る」タブに英文(と日本語訳)を貼ると表示されます。行をタップでその位置へ、★でメモに保存。</p></div></section>
+
+<section id="p-memo" hidden>
+<textarea id="note" placeholder="今の位置にメモ（単語・表現・気づき）"></textarea>
+<div class="bar" style="padding:0 0 8px"><button id="addm" class="on">今の位置でメモ</button><button id="copym">コピー</button></div>
+<div id="memos"></div></section>
+
+<section id="p-subs" hidden>
+<p class="hint">SRT/VTT形式、または「00:12 文」形式の字幕テキストを貼ります。字幕はこの端末内にだけ保存されます。</p>
+<textarea id="en" placeholder="英文の字幕"></textarea>
+<textarea id="ja" placeholder="日本語訳の字幕（任意）"></textarea>
+<button id="build" class="on">字幕を反映</button></section>
+
+<script>
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+let vid='',player=null,apiReady=false,cues=[],mode='en',cur=-1,memos=store.get('memos',[]);
+
+function vidId(u){const m=u.match(/(?:youtu\.be\/|v=|shorts\/|embed\/|live\/)([\w-]{11})/);return m?m[1]:(/^[\w-]{11}$/.test(u.trim())?u.trim():'')}
+function fmt(t){t=Math.floor(t);return Math.floor(t/60)+':'+String(t%60).padStart(2,'0')}
+function tc(s){s=s.trim().replace(',','.').split(':').map(parseFloat);return s.length==3?s[0]*3600+s[1]*60+s[2]:s[0]*60+s[1]}
+function parse(txt){const out=[];txt=txt.replace(/\r/g,'').trim();
+ if(!txt.includes('-->')){txt.split('\n').forEach((l,i,a)=>{const m=l.match(/^\s*(\d+:\d\d(?::\d\d)?(?:[.,]\d+)?)\s+(.+)/);if(m)out.push({s:tc(m[1]),e:0,t:m[2]})});out.forEach((c,i)=>c.e=out[i+1]?out[i+1].s:c.s+5);return out}
+ txt.split(/\n\s*\n/).forEach(b=>{const L=b.split('\n'),i=L.findIndex(l=>l.includes('-->'));if(i<0)return;const [a,z]=L[i].split('-->');const t=L.slice(i+1).join(' ').replace(/<[^>]+>/g,'').trim();if(t)out.push({s:tc(a),e:tc(z.trim().split(' ')[0]),t})});return out}
+function build(save=true){const en=parse($('#en').value),ja=parse($('#ja').value),base=en.length?en:ja;
+ cues=base.map(c=>{const o={s:c.s,e:c.e,en:en.length?c.t:'',ja:en.length?'':c.t};if(en.length&&ja.length){const j=ja.find(x=>x.s<c.e&&x.e>c.s);o.ja=j?j.t:''}return o});
+ if(save&&vid)store.set('subs:'+vid,{en:$('#en').value,ja:$('#ja').value});cur=-1;renderList()}
+const txt=c=>mode=='en'?(c.en||c.ja):mode=='ja'?(c.ja||c.en):[c.en,c.ja].filter(Boolean).join('\n');
+
+function renderList(){const L=$('#list');L.textContent='';
+ cues.forEach((c,i)=>{const r=document.createElement('div');r.className='row';r.id='c'+i;
+  r.innerHTML='<span class="t"></span><span class="x"></span><button>★</button>';
+  r.querySelector('.t').textContent=fmt(c.s);r.querySelector('.x').textContent=txt(c);
+  r.querySelector('.x').onclick=r.querySelector('.t').onclick=()=>seek(c.s);
+  r.querySelector('button').onclick=()=>addMemo(c.s,[c.en,c.ja].filter(Boolean).join(' / '),'');
+  L.appendChild(r)});show()}
+function show(){const c=cues[cur];$('#cur').textContent=c?txt(c):'';
+ $$('.row.now').forEach(e=>e.classList.remove('now'));const r=$('#c'+cur);if(r){r.classList.add('now');r.scrollIntoView({block:'nearest'})}}
+function seek(t){if(player&&player.seekTo){player.seekTo(t,true);player.playVideo()}}
+
+function addMemo(t,text,note){memos.push({v:vid,t,text,note});store.set('memos',memos);renderMemos()}
+function renderMemos(){const M=$('#memos');M.textContent='';
+ memos.map((m,i)=>[m,i]).filter(([m])=>m.v==vid).sort((a,b)=>a[0].t-b[0].t).forEach(([m,i])=>{
+  const r=document.createElement('div');r.className='row';r.innerHTML='<span class="t"></span><span class="x"></span><button>×</button>';
+  r.querySelector('.t').textContent=fmt(m.t);r.querySelector('.x').textContent=[m.text,m.note].filter(Boolean).join('\n→ ');
+  r.querySelector('.t').onclick=()=>seek(m.t);
+  r.querySelector('button').onclick=()=>{memos.splice(i,1);store.set('memos',memos);renderMemos()};M.appendChild(r)})}
+
+function load(){if(!apiReady||!vid)return;
+ if(player&&player.loadVideoById)player.loadVideoById(vid);
+ else player=new YT.Player('player',{videoId:vid,playerVars:{playsinline:1,rel:0}});
+ const s=store.get('subs:'+vid,{en:'',ja:''});$('#en').value=s.en;$('#ja').value=s.ja;build(false);renderMemos();store.set('last',vid)}
+window.onYouTubeIframeAPIReady=()=>{apiReady=true;load()};
+const sc=document.createElement('script');sc.src='https://www.youtube.com/iframe_api';document.head.appendChild(sc);
+
+$('#go').onclick=()=>{const v=vidId($('#url').value);if(!v){alert('YouTubeのURLを確認してください');return}vid=v;load()};
+$('#build').onclick=()=>{build();setTab('list')};
+$('#addm').onclick=()=>{if(!player||!player.getCurrentTime)return;const t=player.getCurrentTime(),c=cues[cur];addMemo(t,c?[c.en,c.ja].filter(Boolean).join(' / '):'',$('#note').value.trim());$('#note').value=''};
+$('#copym').onclick=()=>{const s=memos.filter(m=>m.v==vid).sort((a,b)=>a.t-b.t).map(m=>fmt(m.t)+' '+[m.text,m.note].filter(Boolean).join(' → ')).join('\n');navigator.clipboard&&navigator.clipboard.writeText(s)};
+$$('#modes button').forEach(b=>b.onclick=()=>{mode=b.dataset.m;$$('#modes button').forEach(x=>x.classList.toggle('on',x==b));renderList()});
+function setTab(p){['list','memo','subs'].forEach(n=>$('#p-'+n).hidden=n!=p);$$('#tabs button').forEach(x=>x.classList.toggle('on',x.dataset.p==p))}
+$$('#tabs button').forEach(b=>b.onclick=()=>setTab(b.dataset.p));
+setInterval(()=>{if(!player||!player.getCurrentTime||!cues.length)return;const t=player.getCurrentTime(),i=cues.findIndex(c=>t>=c.s&&t<c.e);if(i!==cur){cur=i;show()}},250);
+const last=store.get('last','');if(last){vid=last;$('#url').value='https://youtu.be/'+last}
+</script></body></html>
